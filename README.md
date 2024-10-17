@@ -7,7 +7,6 @@ This project aims to unveil the factors contributing to the success of movies, a
 - `dataset07.csv`: Contains the dataset used in the analysis.
 - `Movie-success-analysis-code.qmd`: R scripts and Quarto file for data preprocessing, exploratory data analysis (EDA), and statistical modeling.
 - `Movie-success-analysis.pdf`: Generated reports and visualizations in PDF format.
-- `README.md`: This file, providing an overview of the project and instructions for replication.
 
 ## Data Description
 
