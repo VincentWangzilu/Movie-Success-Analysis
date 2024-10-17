@@ -1,0 +1,769 @@
+---
+title: "Behind the Curtain: Statistical Insights into Movie Success"
+author: "Zilu Wang"
+number-sections: true
+format: 
+  html:
+    embed-resources: true
+    code-tools: true
+  pdf: 
+    documentclass: article
+    fontsize: 11pt
+    geometry: margin=1in
+    linestretch: 1.5
+    keep-tex: true
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    fig-caption: true
+editor_options: 
+  chunk_output_type: console
+execute:
+  echo: false
+  eval: true
+  warning: false
+  message: false
+---
+
+# Introduction
+
+In the evolving landscape of cinematic entertainment, the question of what factors lead a film to be favorably received by audiences has intrigued producers, directors, and marketers alike. This project, titled "Behind the Curtain: Statistical Insights into Movie Success" embarks on a statistical journey to decipher the complex dynamics between various film attributes and their resulting viewer ratings, specifically focusing on the critical threshold of a rating above 7, often considered a benchmark for success in the industry.
+
+The inception of this analysis is rooted in the premise that a film's year of release, length, budget, viewer engagement (measured through votes), and genre hold significant sway over its overall reception. Traditionally, the entertainment industry has relied on anecdotal evidence or isolated case studies to gauge the potential success of film projects. However, this project leverages a Generalized Linear Model (GLM) to evaluate these factors, offering a more empirical basis for understanding cinematic success.
+
+The data set comprises diverse films spanning various years, genres, and production scales, enabling a comprehensive analysis that transcends specific market trends or cultural biases. By employing a generalized linear regression framework, we aim to predict the likelihood of a film achieving a rating above 7, transforming subjective notions of quality and appeal into quantifiable probabilities.
+
+Through this project, the goal is to distill actionable insights that can guide filmmakers and studios in crafting content that resonates with viewers. Beyond its immediate application, this study contributes to the broader discourse on the quantification of artistic and entertainment value, marking a confluence of creativity and analytics.
+
+```{r}
+#| label: libraries
+library(ggplot2)
+library(tidyverse)
+library(gt)
+library(patchwork)
+library(gridExtra)
+library(moderndive)
+library(GGally)
+library(corrplot)
+library(caret)
+library(pROC)
+library(jtools)
+```
+
+```{r}
+data <- read.csv("/Users/ziluwang/Documents/GitHub/DAS-Project2-Group7/dataset07.csv", na.strings = 'NA')
+```
+
+```{r}
+#dim(data)
+```
+
+```{r}
+#colnames(data)
+```
+
+```{r}
+#colSums(is.na(data)
+```
+
+```{r}
+# Data wrangling
+# Replace missing values in length with median
+data$length[is.na(data$length)] <- median(data$length, na.rm = TRUE)
+# Creating a new binary variable based on rating is greater than 7 or not
+data$above_7 <- ifelse(data$rating > 7, 1, 0)
+data$above_7 <- factor(data$above_7, levels = c(0, 1))
+# Change 'genre' from character to factor
+data$genre <- factor(data$genre)
+```
+
+# Methodology
+
+The methodology of the project involves a systematic approach to understanding the factors contributing to movie success, as measured by audience ratings. Initially, the data is cleansed and pre-processed, which includes handling missing values and transforming skewed distributions through log transformations for variables such as film length and votes to achieve distributions closer to normal. Subsequently, a binary variable is created to distinguish films based on whether they have achieved a rating above 7.
+
+An extensive Exploratory Data Analysis (EDA) is conducted to gain deeper insights into underlying patterns and relationships. This includes examining the distributions of key variables, identifying outliers, and assessing correlations.
+
+The analysis then employs a Generalized Linear Model (GLM), specifically logistic regression, to examine the influence of various film attributes on the likelihood of a film receiving a rating above 7, which is considered indicative of success. The model's predictive power and fit are assessed through accuracy, sensitivity, specificity, and AUC.
+
+To fine-tune the model, a series of candidate thresholds for classification are evaluated to identify the optimal balance between sensitivity and specificity. This involves calculating performance metrics across different threshold values and selecting the one that provides the best compromise according to the project's objectives.
+
+The methodology also encompasses evaluation of the model's assumptions and the fit to the data, ensuring the reliability and validity of the findings. Finally, based on the insights gained from the EDA and GLM analysis, strategic recommendations are formulated to guide filmmakers and producers in aligning their projects with the attributes associated with higher-rated films.
+
+# Exploratory Data Anlaysis
+
+## Statistical Summary
+
+```{r}
+# Define the specific variables for the summary
+selected_vars <- c("year", "length", "budget", "votes", "rating")
+
+# Generate a statistical summary for the selected numeric columns in the dataset
+data_summary <- data %>%
+  dplyr::select(all_of(selected_vars)) %>%
+  summarise(across(everything(), list(
+    Mean = ~mean(.x, na.rm = TRUE),
+    SD = ~sd(.x, na.rm = TRUE),
+    Median = ~median(.x, na.rm = TRUE),
+    IQR = ~IQR(.x, na.rm = TRUE),
+    Min = ~min(.x, na.rm = TRUE),
+    Max = ~max(.x, na.rm = TRUE)
+  ), .names = "{.col}_{.fn}")) %>% # Ensure unique column names for pivoting
+  pivot_longer(cols = everything(), names_to = "summary_metric", values_to = "value") %>% # Convert to long format for easier management
+  separate(summary_metric, into = c("variable", "statistic"), sep = "_") %>% # Separate variable and statistic
+  pivot_wider(names_from = statistic, values_from = value) # Pivot wider for final format
+
+# Convert the summary into a table using gt
+data_summary_table <- gt(data_summary) %>%
+  tab_header(
+    title = "Statistical Summary of Numerical Variables"
+  ) %>%
+  cols_label(
+    variable = "Variable",
+    Mean = "Mean",
+    SD = "Standard Deviation",
+    Median = "Median",
+    IQR = "Interquartile Range",
+    Min = "Minimum",
+    Max = "Maximum"
+  )
+
+# Print the table
+data_summary_table
+
+```
+
+```{r}
+# Calculate frequencies and percentages for 'genre'
+genre_summary <- data %>%
+  group_by(genre) %>%
+  summarise(Frequency = n()) %>%
+  mutate(Percentage = round(Frequency / sum(Frequency) * 100, 2)) %>%
+  arrange(desc(Frequency))
+
+# Calculate frequencies and percentages for 'above_7'
+above_7_summary <- data %>%
+  group_by(above_7) %>%
+  summarise(Frequency = n()) %>%
+  mutate(Percentage = round(Frequency / sum(Frequency) * 100, 2)) %>%
+  arrange(desc(Frequency))
+
+# Print the 'genre_summary' table using gt()
+genre_summary_table <- gt(genre_summary) %>%
+  tab_header(title = "Frequency and Percentage Summary by Genre") %>%
+  cols_label(
+    genre = "Genre",
+    Frequency = "Frequency",
+    Percentage = "Percentage (%)"
+  )
+
+# Print the 'above_7_summary' table using gt()
+above_7_summary_table <- gt(above_7_summary) %>%
+  tab_header(title = "Frequency and Percentage Summary for Ratings Above 7") %>%
+  cols_label(
+    above_7 = "Above Rating 7",
+    Frequency = "Frequency",
+    Percentage = "Percentage (%)"
+  )
+
+# Print the tables
+genre_summary_table
+above_7_summary_table
+```
+
+```{r}
+# Apply log transformation to length and votes
+data$length_log <- log1p(data$length)
+data$votes_log <- log1p(data$votes)
+```
+
+## Outliers
+
+**Proportions of outliers for each numeric variable**
+
+```{r}
+# Defining the function to calculate the proportion of outliers
+calculate_outliers <- function(x) {
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  num_outliers <- sum(x < lower_bound | x > upper_bound, na.rm = TRUE)
+  total_values <- sum(!is.na(x))
+  proportion_outliers <- num_outliers / total_values
+  return(proportion_outliers)
+}
+
+# Apply the function only to 'length', 'budget', and 'votes' columns
+selected_columns <- c("length", "budget", "votes")
+outlier_proportions <- sapply(data[selected_columns], calculate_outliers)
+
+# Convert the proportions to a data frame for easier reading
+outlier_table <- as.data.frame(t(outlier_proportions), row.names = "Proportion of Outliers")
+outlier_table
+```
+
+**Proportions of outliers for numeric variables after log**
+
+```{r}
+# Calculate the proportion of outliers for each numeric variable after log transformation
+
+# Apply the function only to 'length_log', and 'votes_log' columns
+selected_columns <- c("length_log", "votes_log")
+outlier_proportions <- sapply(data[selected_columns], calculate_outliers)
+
+# Convert the proportions to a data frame for easier reading
+outlier_table <- as.data.frame(t(outlier_proportions), row.names = "Proportion of Outliers")
+outlier_table
+```
+
+## Visualisation
+
+```{r}
+# List of numeric variables and their respective titles and x-axis labels
+numeric_vars <- c("year", "length", "budget", "votes")
+titles <- c("Distribution of Years", "Distribution of Film Lengths",
+            "Distribution of Budgets", "Distribution of Votes")
+x_labels <- c("Year", "Length (minutes)", "Budget (millions $)", "Votes")
+
+# Loop through numeric variables to create histograms using ggplot2
+plot_list <- list()  # Initialize an empty list to store plots
+
+for (i in 1:length(numeric_vars)) {
+  plot_list[[i]] <- ggplot(data, aes_string(x = numeric_vars[i])) + 
+    geom_histogram(color = "white") +
+    labs(title = titles[i], x = x_labels[i], y = "Frequency") +
+    theme_minimal()
+}
+
+# Display the plots
+gridExtra::grid.arrange(grobs = plot_list, ncol = 2)
+```
+
+```{r}
+# List of numeric variables
+numeric_vars <- c("year", "length_log", "budget", "votes_log")
+
+# Titles and x-axis labels for the histograms
+titles <- c("Distribution of Years", "Distribution of log(Film Lengths)",
+            "Distribution of Budgets", "Distribution of log(Votes)")
+x_labels <- c("Year", "Log(length)", "Budget (millions $)", "Votes", "Rating")
+
+# Loop through numeric variables to create histograms using ggplot2
+plot_list <- list()  # Initialize an empty list to store plots
+
+for (i in 1:length(numeric_vars)) {
+  plot_list[[i]] <- ggplot(data, aes_string(x = numeric_vars[i])) + 
+    geom_histogram(color = "white") +
+    labs(title = titles[i], x = x_labels[i], y = "Frequency") +
+    theme_minimal()
+}
+
+# Display the plots
+gridExtra::grid.arrange(grobs = plot_list, ncol = 2)
+```
+
+```{r}
+numeric_vars <- c("year", "length", "budget", "votes")
+# Set up an empty list to store the ggplot objects
+plot_list <- list()
+
+# Loop through numeric variables to create boxplots using ggplot2
+for (i in 1:length(numeric_vars)) {
+  var <- numeric_vars[i]
+  plot_list[[i]] <- ggplot(data, aes_string(y = var)) + 
+    geom_boxplot(color = "black") +
+    labs(title = paste("Distribution of", var), ylab = var, x = "") +
+    theme_minimal() +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())  # Hide x-axis text and ticks
+}
+
+# Print the plots
+library(gridExtra)
+grid.arrange(grobs = plot_list, ncol = 2)
+```
+
+```{r}
+# Bar plot for genre
+genre_plot <- ggplot(data, aes(x = genre)) +
+  geom_bar(color = "black") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate genre labels
+  labs(title = "Film Counts by Genre", x = "Genre", y = "Count")
+
+# Bar plot for above_7
+above7_plot <- ggplot(data, aes(x = as.factor(above_7))) +  # Ensure above_7 is treated as a factor
+  geom_bar(color = "black") +
+  theme_minimal() +
+  labs(title = "Film Counts by Above 7", x = "Above 7", y = "Count")
+
+grid.arrange(genre_plot, above7_plot, ncol = 2)
+
+```
+
+```{r}
+numeric_data <- dplyr::select(data, -film_id, -genre, -above_7, -rating, -year)
+ggpairs(numeric_data) + 
+  ggtitle("Pairplot of Numeric Variables")
+```
+
+```{r}
+# List of numeric variables for plotting
+numeric_vars <- c("year", "length", "budget", "votes")
+
+# Set up an empty list to store the ggplot objects
+plot_list <- list()
+
+# Loop through numeric variables to create boxplots using ggplot2
+for (i in 1:length(numeric_vars)) {
+  var <- numeric_vars[i]
+  plot_list[[i]] <- ggplot(data, aes(x = as.factor(above_7), y = .data[[var]])) + 
+    geom_boxplot(color = "black") +
+    labs(title = paste(var, "vs. Above 7"), x = "Above 7", y = var) +
+    theme_minimal()
+}
+
+# Print the plots
+grid.arrange(grobs = plot_list, ncol = 2)
+
+```
+
+```{r}
+# Load necessary libraries
+library(scales)  # 
+
+# Convert the data into a suitable format for ggplot
+data_long <- data %>%
+  group_by(genre, above_7) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  mutate(freq = count / sum(count)) %>%
+  ungroup() %>%
+  mutate(above_7 = as.factor(above_7), # Ensure above_7 is treated as a factor
+         genre = factor(genre, levels = unique(genre)))  # Ensure genres are ordered as they appear
+
+# Create the 100% stacked bar plot with specific colors for above_7 variable
+ggplot(data_long, aes(x = genre, y = freq, fill = above_7)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = c("0" = "lightgrey", "1" = "#595959")) +  # Set custom fill colors
+  scale_y_continuous(labels = percent) +  # Convert y-axis to percentage
+  labs(title = "Proportion of Ratings Above 7 by Genre",
+       x = "Genre",
+       y = "Proportion",
+       fill = "Rating Above 7") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels
+
+
+```
+
+```{r}
+ggplot(data, aes(x = genre, y = length)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Boxplot of Movie Length by Genre",
+       x = "Genre", y = "Length (minutes)")
+
+ggplot(data, aes(x = genre, y = budget)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Boxplot of Movie Budget by Genre",
+       x = "Genre", y = "Budget (millions $)")
+
+ggplot(data, aes(x = genre, y = votes_log)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Boxplot of Log(Votes) by Genre",
+       x = "Genre", y = "Log(Votes)")
+```
+
+```{r}
+ggplot(data, aes(x = length_log, y = budget)) +
+  geom_point(aes(color = above_7), alpha = 0.6) +  # Use color to represent rating above or below 7
+  labs(title = "Scatter Plots of Log-transformed Length and Budget by Genre",
+       x = "Log-transformed Length",
+       y = "Budget (millions $)",
+       color = "Rating Above 7") +
+  facet_wrap(~ genre, scales = "fixed") +  # Set scales to 'fixed' to keep axis intervals consistent
+  theme_minimal()
+```
+
+```{r}
+# Prepare the data by selecting relevant variables and convert 'above_7' to a factor
+data_for_plot <- data %>%
+  dplyr::select(year, budget, length_log, votes_log, above_7) %>%
+  mutate(above_7 = factor(above_7, labels = c("Below 7", "Above 7")))
+
+# Create the parallel coordinates plot with increased line transparency
+ggparcoord(data = data_for_plot,
+           columns = c(1, 2, 3, 4), # Indices for year, budget, length_log, votes_log
+           groupColumn = "above_7", # Use 'above_7' to differentiate lines
+           scale = "uniminmax", # This scales each variable to [0,1]
+           title = "Parallel Coordinates Plot for Movie Data",
+           alphaLines = 0.1) + # Increase transparency by lowering alpha value
+  scale_color_manual(values = c("Below 7" = "red", "Above 7" = "blue")) + # Custom colors
+  theme_minimal() +
+  labs(color = "Rating Above 7") # Update legend title
+
+```
+
+## EDA Findings
+
+In the exploratory data analysis, we observed distinct patterns within the film data set. The data set predominantly features action (29.24%), drama (28.66%), and comedy (24.38%) genres, with fewer romantic (0.67%) and short films (4.44%). Notably, only 35% of movies are rated above 7.
+
+The length of films is right-skewed, with most under 100 minutes, but exceptions extending up to 399 minutes. Similarly, the 'votes' distribution is significantly right-skewed, highlighting a disparity in viewer engagement. After log transformations, the distributions of 'length' and 'votes' approached closer to normality but still exhibited skewness. Conversely, budgets appear nearly normally distributed, indicating diverse financial investments across films.
+
+There is a medium positive correlation between log-transformed votes and length, suggesting films of longer duration may engage viewers more. It is also shown that movies rated above 7 typically have higher budgets. Genre-wise, short and documentaries stand out with highest proportions of high-rated films, whereas romance, drama, and action genres show fewer films surpassing the rating threshold. Short films and animations are generally shorter, whereas romance tends to be longer. The budget across various genres does not vary significantly, with action and documentaries exhibit slightly higher budgets. Lastly, romance genre films receive the most votes, while short films receive the fewest, indicating varying audience engagement levels by genre.
+
+# Formal Analysis
+
+```{r}
+# Remove unwanted columns from dataframe
+data_clean <- dplyr::select(data, -film_id, -rating)
+```
+
+```{r}
+# split train and test dataset 
+set.seed(123)  # for reproducibility
+index <- createDataPartition(data_clean$above_7, p = .70, list = FALSE)
+train_data <- data_clean[index, ]
+test_data <- data_clean[-index, ]
+```
+
+## Model Building
+
+```{r echo = TRUE}
+# Full model
+glm_model_full <- glm(above_7 ~ year + length + budget + votes + genre, 
+                      family = binomial, data = train_data)
+# Full Model with Log Transformation
+glm_model_log <- glm(above_7 ~ year + length_log + budget + votes_log + genre, 
+                     family = binomial, data = train_data)
+
+# Model without Year
+glm_model_no_year <- glm(above_7 ~ length_log + budget + votes_log + genre, 
+                        family = binomial, data = train_data)
+
+# Model without Year and Votes_log
+glm_model_no_year_votes <- glm(above_7 ~ length_log + budget + genre, 
+                               family = binomial, data = train_data)
+# Model without Year and Length_log
+glm_model_no_year_length <- glm(above_7 ~ votes_log + budget + genre, 
+                               family = binomial, data = train_data)
+```
+
+In this project, the modeling principle involved constructing and refining a series of logistic regression models to identify key factors influencing a movie's success, defined as achieving a rating above 7. The full model included all variables (except film_id), offering a comprehensive baseline for analysis.
+
+Subsequent models were developed by applying log transformation and removing variables based on their statistical significance, assessed through p-values, and their impact on the model's overall performance. This iterative process aimed to streamline the model, removing less impactful variables while observing changes in performance metrics like accuracy, sensitivity, specificity, and AUC.
+
+## Model Selection
+
+```{r}
+# Define evaluate_model function to return metrics
+evaluate_model <- function(model, test_data) {
+  predictions <- predict(model, test_data, type = "response")
+  predicted_class <- ifelse(predictions > 0.5, 1, 0)  # Classification threshold at 0.32
+  conf_matrix <- confusionMatrix(factor(predicted_class), factor(test_data$above_7))
+  roc_response <- roc(response = test_data$above_7, predictor = predictions)
+  
+  # Compile performance metrics
+  metrics <- list(
+    Accuracy = conf_matrix$overall['Accuracy'],
+    Sensitivity = conf_matrix$byClass['Sensitivity'],
+    Specificity = conf_matrix$byClass['Specificity'],
+    AUC = auc(roc_response), 
+    BIC = BIC(model)
+  )
+  
+  return(metrics)  # Return metrics for storage
+}
+# Store metrics in a structured way
+metrics_list <- list()
+metrics_list[['Model 1']] <- evaluate_model(glm_model_full, test_data)
+metrics_list[['Model 2']] <- evaluate_model(glm_model_log, test_data)
+metrics_list[['Model 3']] <- evaluate_model(glm_model_no_year, test_data)
+metrics_list[['Model 4']] <- evaluate_model(glm_model_no_year_votes, test_data)
+metrics_list[['Model 5']] <- evaluate_model(glm_model_no_year_length, test_data)
+
+
+# Compile metrics into a summary table
+summary_table <- sapply(metrics_list, function(x) sapply(x, function(y) y))  # Collect metrics
+summary_table <- t(summary_table)  # Transpose to make rows correspond to models
+summary_table <- round(summary_table, 4)  # Round for readability
+
+# Setting the column names if they are not automatically set
+model_descriptions <- c(
+    "year + length + budget + votes + genre",
+    "year + length_log + budget + votes_log + genre",
+    "length_log + budget + votes_log + genre",
+    "length_log + budget + genre",
+    "votes_log + budget + genre"
+)
+#summary_table$Variables <- model_descriptions
+colnames(summary_table) <- c("Accuracy", "Sensitivity", "Specificity", "AUC", "BIC")
+
+summary_table <- as.data.frame(summary_table)
+summary_table$Variables <- model_descriptions
+summary_table <- summary_table[, c('Variables', setdiff(names(summary_table), 'Variables'))]
+
+# Print the summary table
+summary_table
+```
+
+Model 4 was chosen for further tuning due to its balance between simplicity and performance. Despite not having the absolute highest accuracy, it provides commendable sensitivity (0.9158) and decent specificity (0.7897), alongside a strong AUC of 0.9405, indicating good discriminative power. With a BIC of 941.4027, it suggests efficiency in balancing model fit with complexity. This makes Model 4 a strong candidate for detailed analysis and threshold optimization.
+
+## Model Tuning
+
+In fine-tuning our logistic regression model, particularly for an imbalanced dataset, we focus on optimizing the classification threshold. This involves systematically assessing various thresholds to find an optimal balance between Accuracy, Sensitivity, and Specificity. The goal is to improve model precision by correctly balancing true positive and negative predictions. This targeted approach ensures our model is better suited to the specific challenges and objectives of our analysis, thereby enhancing its predictive reliability and relevance.
+
+```{r}
+# Define thresholds evaluation method
+evaluate_thresholds <- function(model, test_data, thresholds) {
+  results <- data.frame(Threshold = thresholds, Accuracy = NA, Sensitivity = NA, Specificity = NA, AUC = NA)
+  
+  # Predict probabilities on the test data
+  predictions <- predict(model, test_data, type = "response")
+  roc_response <- roc(response = test_data$above_7, predictor = predictions)
+  auc_value <- auc(roc_response)
+  
+  for (i in seq_along(thresholds)) {
+    threshold <- thresholds[i]
+    predicted_class <- ifelse(predictions > threshold, 1, 0)
+    conf_matrix <- confusionMatrix(factor(predicted_class), factor(test_data$above_7))
+    
+    results[i, "Accuracy"] <- conf_matrix$overall['Accuracy']
+    results[i, "Sensitivity"] <- conf_matrix$byClass['Sensitivity']
+    results[i, "Specificity"] <- conf_matrix$byClass['Specificity']
+    results[i, "AUC"] = auc_value  # AUC remains constant for different thresholds
+  }
+  
+  return(results)
+}
+# Define a series of candidate thresholds
+candidate_thresholds <- seq(0.1, 0.9, by = 0.05)
+
+threshold_evaluation_results <- evaluate_thresholds(glm_model_no_year_votes, test_data, candidate_thresholds)
+
+ggplot(threshold_evaluation_results, aes(x = Threshold)) +
+  geom_line(aes(y = Accuracy, colour = "Accuracy"), size = 1.2) +
+  geom_line(aes(y = Sensitivity, colour = "Sensitivity"), size = 1.2) +
+  geom_line(aes(y = Specificity, colour = "Specificity"), size = 1.2) +
+  scale_colour_manual("", 
+                      breaks = c("Accuracy", "Sensitivity", "Specificity"),
+                      values = c("Accuracy" = "#1b9e77", "Sensitivity" = "#d95f02", "Specificity" = "#7570b3")) +
+  labs(title = "Model Performance Across Different Thresholds",
+       y = "Metric Value",
+       x = "Threshold") +
+  theme_minimal() +
+  theme(legend.position = "right")
+```
+
+```{r}
+evaluate_model <- function(model, test_data) {
+  predictions <- predict(model, test_data, type = "response")
+  predicted_class <- ifelse(predictions > 0.33, 1, 0)  # Classification threshold at 0.32
+  conf_matrix <- confusionMatrix(factor(predicted_class), factor(test_data$above_7))
+  roc_response <- roc(response = test_data$above_7, predictor = predictions)
+  
+  # Compile performance metrics
+  metrics <- list(
+    Accuracy = conf_matrix$overall['Accuracy'],
+    Sensitivity = conf_matrix$byClass['Sensitivity'],
+    Specificity = conf_matrix$byClass['Specificity'],
+    AUC = auc(roc_response), 
+    BIC = BIC(model)
+  )
+  
+  return(metrics)  # Return metrics for storage
+}
+metrics_list <- list()
+metrics_list[['Model 4']] <- evaluate_model(glm_model_no_year_votes, test_data)
+
+# Compile metrics into a summary table
+summary_table <- sapply(metrics_list, function(x) sapply(x, function(y) y))  # Collect metrics
+summary_table <- t(summary_table)  # Transpose to make rows correspond to models
+summary_table <- round(summary_table, 4)  # Round for readability
+
+# Setting the column names if they are not automatically set
+model_descriptions <- c("length_log + budget + genre")
+#summary_table$Variables <- model_descriptions
+colnames(summary_table) <- c("Accuracy", "Sensitivity", "Specificity", "AUC", "BIC")
+
+summary_table <- as.data.frame(summary_table)
+summary_table$Variables <- model_descriptions
+summary_table <- summary_table[, c('Variables', setdiff(names(summary_table), 'Variables'))]
+model_4_summary <- summary_table[summary_table$Variables == "length_log + budget + genre", ]
+
+# Remove the 'Variables' column
+model_4_summary <- model_4_summary[,-1]  # Assuming 'Variables' is the first column
+
+# Convert to long format
+metrics_long_df <- stack(model_4_summary)
+
+# Correct column names assignment
+names(metrics_long_df) <- c("Value", "Metric")
+
+# Rearrange the columns to have 'Metric' as the first column
+metrics_long_df <- metrics_long_df[, c("Metric", "Value")]
+
+# Print the corrected table
+print(metrics_long_df)
+```
+
+The classification threshold of 0.33, as observed from the plot, optimally balances accuracy, sensitivity, and specificity. This threshold reflects a strategic compromise, enhancing the model's ability to correctly identify films rated above and below 7, without heavily sacrificing one metric for another.
+
+Model 4, which utilizes length_log, budget, and genre as predictors, demonstrates strong predictive performance. With an accuracy of 89.23%, it effectively distinguishes between movies rated above and below 7. The model is equally balanced in terms of sensitivity (88.98%) and specificity (89.68%), indicating it is reliable in identifying both high-rated and lower-rated films. The AUC value of 0.9405 suggests good discrimination between the positive and negative classes. Furthermore, a BIC of 941.4027 reflects the model's efficiency, balancing model complexity with fit to the data.
+
+## Model Interpretation
+
+```{r}
+summary(glm_model_no_year_votes)
+```
+
+```{r}
+# Create sequences for log_length and budget
+length_seq <- seq(min(data_clean$length_log), max(data_clean$length_log), length.out = 100)
+budget_seq <- seq(min(data_clean$budget), max(data_clean$budget), length.out = 100)
+
+# Prepare data for plotting
+new_data_length <- expand.grid(length_log = length_seq, budget = mean(data_clean$budget), genre = levels(data_clean$genre))
+new_data_budget <- expand.grid(length_log = mean(data_clean$length_log), budget = budget_seq, genre = levels(data_clean$genre))
+
+# Generate predictions
+new_data_length$prob_above_7 <- predict(glm_model_no_year_votes, newdata = new_data_length, type = "response")
+new_data_budget$prob_above_7 <- predict(glm_model_no_year_votes, newdata = new_data_budget, type = "response")
+
+# Create the plots
+plot_length <- ggplot(new_data_length, aes(x = length_log, y = prob_above_7, color = genre)) +
+  geom_line() +
+  labs(x = "Log Length", y = "Probability of Rating > 7") +
+  theme_minimal() +
+  scale_color_viridis_d()
+
+plot_budget <- ggplot(new_data_budget, aes(x = budget, y = prob_above_7, color = genre)) +
+  geom_line() +
+  labs(x = "Budget", y = "") +
+  theme_minimal() +
+  scale_color_viridis_d() +
+  guides(color = FALSE) # Suppress the legend for the budget plot
+
+# Combine the plots side by side and keep only the left legend
+combined_plots <- plot_length + plot_budget + plot_layout(ncol = 2) 
+
+# Add a title and adjust the legend position to the left
+final_plot <- combined_plots & 
+  plot_annotation(title = "Probability of High Rating by Log Length and Budget across Genres") &
+  theme(legend.position = 'left', plot.title = element_text(hjust = 0.5))
+
+# Display the final combined plot
+final_plot
+```
+
+1.  **Length of Movies (length_log)**: There is a significant negative relationship between the log-transformed length of movies and their likelihood of being rated above 7, with each unit increase reducing the odds by 94% (Odds Ratio = 0.061). This suggests that longer movies are less likely to receive high ratings, potentially indicating viewer preferences for shorter films or perhaps an association with certain film types or genres that are longer but less popular.
+
+2.  **Budget (budget)**: The budget of a movie shows a significant positive association with the likelihood of being rated above 7, with each unit increase in budget increasing the odds of a high rating by 73% (Odds Ratio = 1.733). This might imply that higher-budget movies, which can afford better production quality, actors, and marketing, are more likely to be well-received by audiences.
+
+3.  **Genre**:
+    -   **Documentary**: Documentaries have the highest likelihood of being rated above 7 among genres, 119.188 times more likely than action films. This substantial likelihood suggests that documentaries' content resonates strongly with audiences, making them the most successful genre in this analysis.
+    -   **Short and Comedy**: These genres also show significant higher probability of receiving high ratings compared to action. Short films are 36.669 times more likely, and comedies are 14.374 times more likely than action films to receive ratings above 7, suggesting they are generally well-received or cater to specific audience segments that rate them favorably.
+    -   **Animation and Drama**: Compared to action, animation and drama genres are 80.2% and 92.2% less likely, respectively, to be rated above 7. This indicates that, despite their popularity, films in these genres face greater challenges in surpassing the threshold for perceived success, possibly due to differing audience expectations or the abundance of content within these categories.
+    -   **Romance**: This genre do not show significant effects, possibly due to a smaller sample size.
+
+## Assumption Checking
+
+```{r}
+# residuals <- resid(glm_model_no_year_votes, type = "deviance")
+# # Plotting deviance residuals against predictors
+# par(mfrow = c(2, 2))  # Set up the plotting area
+# plot(train_data$length_log, residuals, xlab = "log(Length)", ylab = "Deviance Residuals")
+# plot(train_data$budget, residuals, xlab = "Budget", ylab = "Deviance Residuals")
+# # For a categorical variable like genre, boxplots can be useful
+# boxplot(residuals ~ train_data$genre, ylab = "Deviance Residuals", xlab = "Genre")
+```
+
+```{r}
+# residuals_deviance <- resid(glm_model_no_year_votes, type = "deviance")
+# plot(residuals_deviance, ylab = "Deviance Residuals", main = "Deviance Residuals vs. Fitted Values")
+# abline(h = 0, col = "red")
+# ```
+# 
+# ```{r}
+# # Install the 'car' package if not already installed
+# if (!requireNamespace("car", quietly = TRUE)) {
+#     install.packages("car")
+# }
+# library(car)
+# scatterplotMatrix(~length_log + budget | above_7, data = train_data)
+# 
+# # Goodness-of-Fit
+# # hosmer_test <- HosmerLemeshowTest(glm_model_no_year_votes)
+# # print(hosmer_test)  # Significant p-value indicates poor fit
+# 
+# # ROC Curve and AUC
+# roc_response <- roc(train_data$above_7, fitted(glm_model_no_year_votes))
+# plot(roc_response, main = "ROC Curve for GLM Model")
+# auc(roc_response)
+# 
+# # Influence Measures
+# influence_measures <- influence(glm_model_no_year_votes)
+# plot(influence_measures$hat, main = "Leverage Values")
+# 
+# # Cook's Distance for identifying influential cases
+# cooksd <- cooks.distance(glm_model_no_year_votes)
+# plot(cooksd, main = "Cook's Distance", ylab = "Cook's distance")
+# abline(h = 0.5, col = "red")  # Rule of thumb threshold
+```
+
+```{r}
+# # Assuming your model is named glm_model
+# fitted_model <- glm(above_7 ~ length_log + budget + genre, family = binomial, data = train_data)
+# dev_res <- resid(fitted_model, type = "deviance")
+# plot(dev_res, ylab = "Deviance Residuals", main = "Plot of Deviance Residuals")
+# abline(h = 0, col = "red")  # Reference line at 0
+```
+
+```{r}
+# qqnorm(dev_res)
+# qqline(dev_res, col = "red")
+```
+
+```{r}
+# library(car)
+# # For the 'length_log' predictor
+# crPlots(glm_model_no_year_votes, terms = ~ length_log)
+# 
+# # For the 'budget' predictor
+# crPlots(glm_model_no_year_votes, terms = ~ budget)
+
+```
+
+```{r}
+if (!require(DHARMa)) install.packages("DHARMa")
+library(DHARMa)
+# Simulate residuals
+residuals_simulated <- simulateResiduals(fittedModel = glm_model_no_year_votes, n = 250)
+
+# Create diagnostic plots
+plot(residuals_simulated)
+```
+
+The DHARMa diagnostic plots for the generalized linear model indicate that the model assumptions are largely satisfied. The quantile-quantile plot reveals that residuals closely follow the expected uniform distribution, suggesting that the model does not exhibit significant misfit. The uniformity is further supported by a high p-value in the Kolmogorov-Smirnov test, indicating no significant deviation from the expected distribution. The residuals versus predicted values plot shows no discernible pattern, implying consistent variance across predicted values and supporting the homoscedasticity assumption. Although there are a few outliers, they don't appear to systematically affect the model's validity. Overall, the analysis suggests that the model is well-fitted to the data under the constraints of GLM assumptions.
+
+# Conclusion
+
+This analysis has shed light on the influential dynamics between film attributes and audience ratings. Specifically, it has been observed that film length, budget, and genre play pivotal roles in determining a movie's rating. Notably, shorter films tend to receive higher ratings, highlighting the audience's preference for narrative conciseness and the ability to maintain engagement. Similarly, films with higher budgets are generally correlated with ratings above 7, indicating that substantial financial investment in production quality, star power, and marketing can significantly influence viewer perceptions and satisfaction. Among the various genres analyzed, short films and documentaries have demonstrated particularly high success rates, suggesting that niche audiences or the unique storytelling and educational aspects of these genres resonate well with viewers. On the other hand, genres such as drama and animation appear to face greater challenges in achieving high ratings, potentially due to genre-specific expectations or saturated market conditions.
+
+These findings provide valuable insights into the multifaceted nature of film success. They suggest that filmmakers, producers, and studios should consider a holistic approach when planning new projects. By balancing the essential elements of film length, budget allocation, and genre selection, and aligning them with target audience preferences and market trends, filmmakers can optimize their strategies to enhance audience reception and increase the likelihood of producing critically acclaimed and commercially successful films.
+
+# Discussion
+
+## Implication
+
+This study highlights key factors influencing audience ratings: film length, budget, and genre. Findings suggest filmmakers should focus on concise storytelling, invest in production quality, and select genres wisely to enhance film success. This also impacts marketing strategies, advocating for targeted campaigns, especially for niche genres like documentaries.
+
+## Limitation
+
+One limitation of this analysis is the imbalance of genres in the data set, which can potentially skew predictive modeling and result in biased outcomes, especially towards over-represented genres.
+
+## Future Research
+
+Future research could extend to analyzing film success through both audience ratings and box office revenue, offering a comprehensive view of what defines success in the film industry. Additionally, examining subtleties within film genres—such as specific castings, themes, or narrative structures—could uncover elements that significantly impact a film's success. This detailed analysis would help filmmakers and studios better align their projects with audience preferences and market trends, potentially leading to higher ratings and greater financial success.
